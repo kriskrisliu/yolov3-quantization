@@ -30,6 +30,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from quant import fast_quant, save_act_max
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv3 root directory
 if str(ROOT) not in sys.path:
@@ -142,6 +144,9 @@ def run(
     plots=True,
     callbacks=Callbacks(),
     compute_loss=None,
+    bit=None,
+    quant=None,
+    search_clip=None,
 ):
     # Initialize/load model and set device
     training = model is not None
@@ -158,6 +163,13 @@ def run(
 
         # Load model
         model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
+        
+        # quantize pytorch model
+        if quant:
+            print("Quantization")
+            # import ipdb;ipdb.set_trace()
+            model = fast_quant(model, bit=bit, clip_search=search_clip)
+
         stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
         imgsz = check_img_size(imgsz, s=stride)  # check image size
         half = model.fp16  # FP16 supported on limited backends with CUDA
@@ -188,7 +200,7 @@ def run(
                 f"{weights} ({ncm} classes) trained on different --data than what you passed ({nc} "
                 f"classes). Pass correct combination of --weights and --data that are trained together."
             )
-        model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz))  # warmup
+        # model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz))  # warmup
         pad, rect = (0.0, False) if task == "speed" else (0.5, pt)  # square inference for benchmarks
         task = task if task in ("train", "val", "test") else "val"  # path to train/val/test images
         dataloader = create_dataloader(
@@ -286,6 +298,7 @@ def run(
             plot_images(im, output_to_target(preds), paths, save_dir / f"val_batch{batch_i}_pred.jpg", names)  # pred
 
         callbacks.run("on_val_batch_end", batch_i, im, targets, paths, shapes, preds)
+    save_act_max(model, bit=bit)
 
     # Compute metrics
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
@@ -380,6 +393,9 @@ def parse_opt():
     parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
     parser.add_argument("--half", action="store_true", help="use FP16 half-precision inference")
     parser.add_argument("--dnn", action="store_true", help="use OpenCV DNN for ONNX inference")
+    parser.add_argument("--bit", type=int, default=8, help="bit width")
+    parser.add_argument("--quant", action="store_true", help="quantization enabled")
+    parser.add_argument("--search_clip", action="store_true", help="")
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     opt.save_json |= opt.data.endswith("coco.yaml")
