@@ -262,18 +262,24 @@ def quant_conv_forward(self, x: Tensor):
 def fast_quant(model, bit=8, clip_search=False):
     num_4bit = 0
     name_4bit = []
+    print(model)
+    # import ipdb;ipdb.set_trace()
+    conv_num = 0
     for name, module in tqdm(model.named_modules(), desc="Quantize weights"):
         module.own_name = name
         if isinstance(module, nn.Conv2d):
+            conv_num += 1
             w = module.weight.data.clone()
             num = w[:,:,0,0].numel()
             module.bit = bit # activation bit width
-            if num > 512*512 or name.endswith("model.16.conv"):
+            if num > 512*512 or name.endswith("model.16.conv") or name.endswith("84.conv_84"):
                 if (
-                    name.endswith("model.12.conv") or
-                    name.endswith("model.14.conv") or
-                    name.endswith("model.16.conv")
-                    
+                    name.endswith("model.12.conv") 
+                    or name.endswith("model.14.conv") 
+                    or name.endswith("model.16.conv") 
+                    or name.endswith("84.conv_84")
+                    or name.endswith("79.conv_79")
+                    or name.endswith("77.conv_77")
                 ):
                     wbit = 6
                 else:
@@ -284,7 +290,7 @@ def fast_quant(model, bit=8, clip_search=False):
             else:
                 wbit = bit
             module.wbit = wbit
-            print("|", name,"|", f"bit=W{wbit}A{module.bit}")
+            print(conv_num,"|", name,"|", f"bit=W{wbit}A{module.bit}",f"| {module.weight.shape[0]}, {module.weight.shape[1]}")
             wq, scale_channel_wise = quant_weight(w, wbit, mode="channel_wise", symmetric=True)
             # import ipdb;ipdb.set_trace()
             module.original_weight = w
@@ -296,7 +302,6 @@ def fast_quant(model, bit=8, clip_search=False):
         # elif isinstance(module, nn.SiLU):
         #     new_module = nn.LeakyReLU(inplace=True)
         #     update_module(model, name, new_module=new_module)
-    print(model)
     print("-"*40)
     print(name_4bit)
     print(f"4bit layer numbers: {num_4bit}")
