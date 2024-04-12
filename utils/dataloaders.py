@@ -784,6 +784,12 @@ class LoadImagesAndLabels(Dataset):
             if r != 1:  # if sizes are not equal
                 interp = cv2.INTER_LINEAR if (self.augment or r > 1) else cv2.INTER_AREA
                 im = cv2.resize(im, (math.ceil(w0 * r), math.ceil(h0 * r)), interpolation=interp)
+            #     h_r, w_r = im.shape[:2]
+            #     canvas = np.full((max(h_r,w_r), max(h_r,w_r), 3), 128)
+            #     h_c, w_c = canvas.shape[:2]
+            #     canvas[(h_c-h_r)//2:(h_c-h_r)//2+h_r, (w_c-w_r)//2:(w_c-w_r)//2+w_r, :] = im
+            #     im = canvas
+            # return im, (max(h0,w0), max(h0,w0)), im.shape[:2]
             return im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
         return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
 

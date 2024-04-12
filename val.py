@@ -31,6 +31,8 @@ import torch
 from tqdm import tqdm
 
 from quant import fast_quant, save_act_max
+from darknet import Darknet
+from torch.autograd import Variable
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv3 root directory
@@ -147,6 +149,7 @@ def run(
     bit=None,
     quant=None,
     search_clip=None,
+    darknet=False
 ):
     # Initialize/load model and set device
     training = model is not None
@@ -162,21 +165,28 @@ def run(
         (save_dir / "labels" if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
         # Load model
-        model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
+        ultralytics_model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
+        model = ultralytics_model
         
+        # darknet model
+        if darknet:
+            model = Darknet("yolov3.cfg").to(device)
+            model.load_weights("yolov3.weights")
+            print("Darknet successfully loaded")
+    
         # quantize pytorch model
         if quant:
             print("Quantization")
             # import ipdb;ipdb.set_trace()
             model = fast_quant(model, bit=bit, clip_search=search_clip)
 
-        stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
+        stride, pt, jit, engine = ultralytics_model.stride, ultralytics_model.pt, ultralytics_model.jit, ultralytics_model.engine
         imgsz = check_img_size(imgsz, s=stride)  # check image size
-        half = model.fp16  # FP16 supported on limited backends with CUDA
+        half = False  # FP16 supported on limited backends with CUDA
         if engine:
-            batch_size = model.batch_size
+            batch_size = ultralytics_model.batch_size
         else:
-            device = model.device
+            device = ultralytics_model.device
             if not (pt or jit):
                 batch_size = 1  # export.py models default to batch-size 1
                 LOGGER.info(f"Forcing --batch-size 1 square inference (1,3,{imgsz},{imgsz}) for non-PyTorch models")
@@ -195,7 +205,7 @@ def run(
     # Dataloader
     if not training:
         if pt and not single_cls:  # check --weights are trained on --data
-            ncm = model.model.nc
+            ncm = ultralytics_model.model.nc
             assert ncm == nc, (
                 f"{weights} ({ncm} classes) trained on different --data than what you passed ({nc} "
                 f"classes). Pass correct combination of --weights and --data that are trained together."
@@ -217,7 +227,7 @@ def run(
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
-    names = model.names if hasattr(model, "names") else model.module.names  # get class names
+    names = ultralytics_model.names if hasattr(ultralytics_model, "names") else ultralytics_model.module.names  # get class names
     if isinstance(names, (list, tuple)):  # old format
         names = dict(enumerate(names))
     class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
@@ -240,7 +250,11 @@ def run(
 
         # Inference
         with dt[1]:
-            preds, train_out = model(im) if compute_loss else (model(im, augment=augment), None)
+            if isinstance(model, Darknet):
+                preds = model(Variable(im), CUDA=True)
+                # print(preds)
+            else:
+                preds, train_out = model(im) if compute_loss else (model(im, augment=augment), None)
 
         # Loss
         if compute_loss:
@@ -298,7 +312,8 @@ def run(
             plot_images(im, output_to_target(preds), paths, save_dir / f"val_batch{batch_i}_pred.jpg", names)  # pred
 
         callbacks.run("on_val_batch_end", batch_i, im, targets, paths, shapes, preds)
-    save_act_max(model, bit=bit)
+    if quant:
+        save_act_max(model, bit=bit)
 
     # Compute metrics
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
@@ -393,6 +408,8 @@ def parse_opt():
     parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
     parser.add_argument("--half", action="store_true", help="use FP16 half-precision inference")
     parser.add_argument("--dnn", action="store_true", help="use OpenCV DNN for ONNX inference")
+    
+    parser.add_argument("--darknet", action="store_true", help="use darknet model")
     parser.add_argument("--bit", type=int, default=8, help="bit width")
     parser.add_argument("--quant", action="store_true", help="quantization enabled")
     parser.add_argument("--search_clip", action="store_true", help="")
